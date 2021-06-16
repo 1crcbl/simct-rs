@@ -3,10 +3,7 @@
 use std::collections::HashSet;
 
 use hdf5;
-use ndarray::{
-    parallel::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator},
-    Array, ArrayView2, Axis,
-};
+use ndarray::{Array, ArrayView2, Axis, parallel::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator}, s};
 use simct::{CoverTree, CoverTreeBuilder, Metric};
 
 fn main() {
@@ -33,13 +30,13 @@ fn main() {
         .build(train);
 
     let test = file.dataset("test").unwrap().read_2d::<f64>().unwrap();
-    let validation = file
+    let _validation = file
         .dataset("neighbors")
         .unwrap()
         .read_2d::<usize>()
         .unwrap();
 
-    validate(&ct, 3281, test.view(), validation.view());
+    let _ = ct.search2(test.slice(s!(0..10, ..)), 100);
 }
 
 fn validate(ct: &CoverTree, idx: usize, test: ArrayView2<f64>, validation_mtx: ArrayView2<usize>) {

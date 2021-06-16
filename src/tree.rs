@@ -1,7 +1,4 @@
-use std::{
-    ops::Div,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, ops::Div, sync::{Arc, RwLock}};
 
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
 use ndarray_linalg::{norm, Norm, NormalizeAxis};
@@ -163,19 +160,36 @@ impl CoverTree {
     pub fn search(&self, query: ArrayView1<'_, Scalar>, k: usize) -> Vec<Neighbour> {
         match &self.root {
             Some(root) => {
-                let mut result = if self.metric == Metric::Angular {
-                    let q = query.div(query.norm());
-                    Self::nn(q.view(), root, self.metric, k)
-                } else {
-                    Self::nn(query, root, self.metric, k)
-                };
-
-                result.sort_by(|a, b| a.dist.partial_cmp(&b.dist).unwrap());
-                result.truncate(k);
-                result
+                Self::exe_search(root, query, k, self.metric)
             }
-            None => Vec::new(),
+            None => Vec::with_capacity(0),
         }
+    }
+
+    /// Performs the nearest neighbour search for an array of queries and returns ```k``` neighbours who
+    /// are closest to the points in the query array.
+    pub fn search2(&self, query: ArrayView2<'_, Scalar>, k: usize) -> HashMap<usize, Vec<Neighbour>> {
+        match &self.root {
+            Some(root) => {
+                query.outer_iter().into_par_iter().enumerate().map(|(idx, q1)| {
+                    (idx, Self::exe_search(root, q1, k, self.metric))
+                }).collect()
+            }
+            None => HashMap::with_capacity(0),
+        }
+    }
+
+    fn exe_search(root: &Arc<RwLock<Node>>, query: ArrayView1<'_, Scalar>, k: usize, metric: Metric) -> Vec<Neighbour> {
+        let mut result = if metric == Metric::Angular {
+            let q = query.div(query.norm());
+            Self::nn(q.view(), root, metric, k)
+        } else {
+            Self::nn(query, root, metric, k)
+        };
+
+        result.sort_by(|a, b| a.dist.partial_cmp(&b.dist).unwrap());
+        result.truncate(k);
+        result
     }
 
     /// Executes the nearest neighbour search at a parent node.
