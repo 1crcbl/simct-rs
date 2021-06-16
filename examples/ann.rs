@@ -3,7 +3,10 @@
 use std::collections::HashSet;
 
 use hdf5;
-use ndarray::{Array, ArrayView2, Axis, parallel::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator}, s};
+use ndarray::{
+    parallel::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator},
+    s, Array, ArrayView2, Axis,
+};
 use simct::{CoverTree, CoverTreeBuilder, Metric};
 
 fn main() {

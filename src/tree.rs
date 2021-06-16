@@ -1,4 +1,8 @@
-use std::{collections::HashMap, ops::Div, sync::{Arc, RwLock}};
+use std::{
+    collections::HashMap,
+    ops::Div,
+    sync::{Arc, RwLock},
+};
 
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
 use ndarray_linalg::{norm, Norm, NormalizeAxis};
@@ -29,7 +33,7 @@ impl Neighbour {
 }
 
 /// A type of tree data structure which is designed for fast nearest neighbour search in general
-/// $n$-point metric spaces and requires ```O(n)``` space.
+/// n-point metric spaces and requires ```O(n)``` space.
 #[derive(Clone, Debug)]
 pub struct CoverTree {
     base: Scalar,
@@ -159,27 +163,35 @@ impl CoverTree {
     /// are closest to the ```query``` point.
     pub fn search(&self, query: ArrayView1<'_, Scalar>, k: usize) -> Vec<Neighbour> {
         match &self.root {
-            Some(root) => {
-                Self::exe_search(root, query, k, self.metric)
-            }
+            Some(root) => Self::exe_search(root, query, k, self.metric),
             None => Vec::with_capacity(0),
         }
     }
 
     /// Performs the nearest neighbour search for an array of queries and returns ```k``` neighbours who
     /// are closest to the points in the query array.
-    pub fn search2(&self, query: ArrayView2<'_, Scalar>, k: usize) -> HashMap<usize, Vec<Neighbour>> {
+    pub fn search2(
+        &self,
+        query: ArrayView2<'_, Scalar>,
+        k: usize,
+    ) -> HashMap<usize, Vec<Neighbour>> {
         match &self.root {
-            Some(root) => {
-                query.outer_iter().into_par_iter().enumerate().map(|(idx, q1)| {
-                    (idx, Self::exe_search(root, q1, k, self.metric))
-                }).collect()
-            }
+            Some(root) => query
+                .outer_iter()
+                .into_par_iter()
+                .enumerate()
+                .map(|(idx, q1)| (idx, Self::exe_search(root, q1, k, self.metric)))
+                .collect(),
             None => HashMap::with_capacity(0),
         }
     }
 
-    fn exe_search(root: &Arc<RwLock<Node>>, query: ArrayView1<'_, Scalar>, k: usize, metric: Metric) -> Vec<Neighbour> {
+    fn exe_search(
+        root: &Arc<RwLock<Node>>,
+        query: ArrayView1<'_, Scalar>,
+        k: usize,
+        metric: Metric,
+    ) -> Vec<Neighbour> {
         let mut result = if metric == Metric::Angular {
             let q = query.div(query.norm());
             Self::nn(q.view(), root, metric, k)
@@ -548,9 +560,6 @@ impl CoverTreeBuilder {
 
         let level = Scalar::log(max_dist, base).ceil() as i32;
         let node_idx = chunk_index * data.nrows();
-
-        // let node = Node::with_level(node_idx, level, base, data.row(0).to_owned());
-        // ct.root = Some(Arc::new(RwLock::new(node)));
 
         for (ii, dta) in data.outer_iter().enumerate() {
             let node = Node::with_level(node_idx + ii, level, base, dta.to_owned());
