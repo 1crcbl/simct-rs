@@ -31,6 +31,8 @@ impl Neighbour {
     }
 }
 
+/// A type of tree data structure which is designed for fast nearest neighbour search in general
+/// $n$-point metric spaces and requires ```O(n)``` space.
 #[derive(Clone, Debug)]
 pub struct CoverTree {
     base: Scalar,
@@ -49,29 +51,9 @@ impl Default for CoverTree {
 }
 
 impl CoverTree {
-    pub fn verify(&self) {
-        match &self.root {
-            Some(root) => root.read().unwrap().verify(self.metric),
-            None => {}
-        };
-    }
-
-    pub fn count(&self) -> usize {
-        match &self.root {
-            Some(root) => root.read().unwrap().count() + 1,
-            None => 0,
-        }
-    }
-
-    pub fn sum(&self) -> usize {
-        match &self.root {
-            Some(root) => root.read().unwrap().sum(),
-            None => 0,
-        }
-    }
-
+    /// Inserts a new point to a tree.
     pub fn insert(&mut self, data: Array1<Scalar>) {
-        let count = self.count();
+        let count = self.size();
         let node = Arc::new(RwLock::new(Node::new(count, self.base, data)));
         self.insert_node(node);
     }
@@ -176,14 +158,16 @@ impl CoverTree {
         }
     }
 
-    pub fn search(&self, query: ArrayView1<Scalar>, k: usize) -> Vec<Neighbour> {
+    /// Performs the nearest neighbour search for a single query and returns ```k``` neighbours who
+    /// are closest to the ```query``` point.
+    pub fn search(&self, query: ArrayView1<'_, Scalar>, k: usize) -> Vec<Neighbour> {
         match &self.root {
             Some(root) => {
                 let mut result = if self.metric == Metric::Angular {
                     let q = query.div(query.norm());
-                    Self::nn2(q.view(), root, self.metric, k)
+                    Self::nn(q.view(), root, self.metric, k)
                 } else {
-                    Self::nn2(query, root, self.metric, k)
+                    Self::nn(query, root, self.metric, k)
                 };
 
                 result.sort_by(|a, b| a.dist.partial_cmp(&b.dist).unwrap());
@@ -194,8 +178,9 @@ impl CoverTree {
         }
     }
 
-    fn nn2(
-        x: ArrayView1<Scalar>,
+    /// Executes the nearest neighbour search at a parent node.
+    fn nn(
+        x: ArrayView1<'_, Scalar>,
         p: &Arc<RwLock<Node>>,
         metric: Metric,
         k: usize,
@@ -236,7 +221,7 @@ impl CoverTree {
 
         let mut nnc: Vec<_> = nn
             .par_iter()
-            .map(|nb| Self::nn2(x.view(), &nb.node, metric, k))
+            .map(|nb| Self::nn(x.view(), &nb.node, metric, k))
             .flatten()
             .collect();
 
@@ -399,12 +384,29 @@ impl CoverTree {
     }
 
     #[inline(always)]
-    fn distance(&self, a: ArrayView1<Scalar>, b: ArrayView1<Scalar>) -> Scalar {
+    fn distance(&self, a: ArrayView1<'_, Scalar>, b: ArrayView1<'_, Scalar>) -> Scalar {
         self.metric.distance(a, b)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn verify(&self) {
+        match &self.root {
+            Some(root) => root.read().unwrap().verify(self.metric),
+            None => {}
+        };
+    }
+
+    /// Returns the number of points in a tree.
+    pub fn size(&self) -> usize {
+        match &self.root {
+            Some(root) => root.read().unwrap().count() + 1,
+            None => 0,
+        }
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+/// A build struct for initialising a new cover tree.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CoverTreeBuilder {
     base: Option<Scalar>,
     metric: Option<Metric>,
@@ -413,33 +415,40 @@ pub struct CoverTreeBuilder {
 }
 
 impl CoverTreeBuilder {
+    /// Creates a builder with default parameters.
     pub fn new() -> Self {
         Self {
             ..Default::default()
         }
     }
 
+    /// Sets the ```base``` in exponentiation when calculating the covering distance (or invariant)
+    /// of a level.
     pub fn base(mut self, base: Scalar) -> Self {
         self.base = Some(base);
         self
     }
 
+    /// Sets the distance function for a tree.
     pub fn metric(mut self, metric: Metric) -> Self {
         self.metric = Some(metric);
         self
     }
 
+    /// Sets the desired depth of a tree.
     pub fn depth(mut self, depth: usize) -> Self {
         self.depth = Some(depth);
         self
     }
 
+    /// Sets the chunk size for parallel executions.
     pub fn chunk_size(mut self, chunk_size: usize) -> Self {
         self.chunk_size = Some(chunk_size);
         self
     }
 
-    pub fn build(self, mut data: Array2<Scalar>) -> Option<CoverTree> {
+    /// Constructs a cover tree based on the given data and parameters.
+    pub fn build(self, mut data: Array2<Scalar>) -> CoverTree {
         // let norms = data.map_axis(Axis(0), |x| x.norm_l2());
         let metric = match self.metric {
             Some(metric) => {
@@ -498,13 +507,13 @@ impl CoverTreeBuilder {
             self.build_internal(0, data.view(), metric, max_dist, min_dist)
         };
 
-        Some(ct)
+        ct
     }
 
     fn build_internal(
         self,
         chunk_index: usize,
-        data: ArrayView2<Scalar>,
+        data: ArrayView2<'_, Scalar>,
         metric: Metric,
         max_dist: Scalar,
         min_dist: Scalar,
@@ -599,7 +608,8 @@ impl Node {
         }
     }
 
-    pub fn verify(&self, metric: Metric) {
+    #[allow(dead_code)]
+    pub(crate) fn verify(&self, metric: Metric) {
         if self.children.is_empty() {
             return;
         }
@@ -622,7 +632,7 @@ impl Node {
         }
     }
 
-    pub fn count(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         let mut count = self.children.len();
 
         for q in &self.children {
@@ -631,16 +641,5 @@ impl Node {
         }
 
         count
-    }
-
-    pub fn sum(&self) -> usize {
-        let mut sum = self.idx;
-
-        for q in &self.children {
-            let qr = q.read().unwrap();
-            sum += qr.sum();
-        }
-
-        sum
     }
 }

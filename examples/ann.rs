@@ -12,15 +12,17 @@ use simct::{CoverTree, CoverTreeBuilder, Metric};
 fn main() {
     let arg: Vec<_> = std::env::args().collect();
 
-    let chunk_size = if arg.len() >= 2 {
-        arg[1].to_string().parse::<usize>().unwrap()
+    let (filepath, chunk_size) = if arg.len() >= 3 {
+        (
+            arg[1].to_string(),
+            arg[2].to_string().parse::<usize>().unwrap(),
+        )
     } else {
-        1000
+        eprintln!("The example requires two arguments: <file path> <chunk size>");
+        std::process::exit(1);
     };
 
-    let file =
-        // hdf5::File::open("./data/glove-25-angular.hdf5")
-        hdf5::File::open("./data/sift-128-euclidean.hdf5").unwrap();
+    let file = hdf5::File::open(filepath).unwrap();
     let train = file.dataset("train").unwrap().read_2d::<f64>().unwrap();
     println!("{}", train.nrows());
 
@@ -29,13 +31,6 @@ fn main() {
         .metric(Metric::Euclidean)
         .chunk_size(chunk_size)
         .build(train);
-
-    assert!(ct.is_some());
-    let ct = ct.unwrap();
-    ct.verify();
-
-    println!("{}", ct.count());
-    println!("{}", ct.sum());
 
     let test = file.dataset("test").unwrap().read_2d::<f64>().unwrap();
     let validation = file
@@ -53,15 +48,13 @@ fn validate(ct: &CoverTree, idx: usize, test: ArrayView2<f64>, validation_mtx: A
         vs.insert(*x);
     }
 
-    dbg!(&vs);
-
     let mut count = 0;
     let result = ct.search(test.row(idx), 100);
     for nn in &result {
-        if vs.contains(&nn.idx()) && nn.idx() == 237424 {
+        if vs.contains(&nn.idx()) {
             count += 1;
         }
     }
 
-    println!("{} > count = {}/{}", idx, count, vs.len());
+    println!("{} > matched neighbours = {}/{}", idx, count, vs.len());
 }

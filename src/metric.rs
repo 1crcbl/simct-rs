@@ -3,20 +3,22 @@ use ndarray::ArrayView1;
 
 use ndarray_stats::DeviationExt;
 
+/// Enum for distance functions in a metric space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Metric {
-    /// L-1
+    /// L-1 or Manhattan distance.
     Manhattan,
-    /// L-2
+    /// L-2 or Euclidean distance.
     Euclidean,
-    /// L-inf
+    /// L-inf or Chebyshev distance
     Chebyshev,
-    /// Angular/Cosine
+    /// Angular or cosine distance
     Angular,
 }
 
 impl Metric {
-    pub fn distance(&self, a: ArrayView1<Scalar>, b: ArrayView1<Scalar>) -> Scalar {
+    /// Calculate the distance between two points.
+    pub fn distance(&self, a: ArrayView1<'_, Scalar>, b: ArrayView1<'_, Scalar>) -> Scalar {
         match self {
             Metric::Manhattan => a.l1_dist(&b).unwrap(),
             Metric::Euclidean => a.l2_dist(&b).unwrap(),
