@@ -1,0 +1,16 @@
+[package]
+name = "simct"
+version = "0.1.0"
+authors = ["1crcbl <1crcbl@protonmail.com>"]
+edition = "2018"
+
+[dependencies]
+hdf5 = "0.7.1"
+ndarray = { version = "0.14.0", features = ["rayon"] }
+ndarray-stats = { version = "0.4.0"}
+ndarray-linalg = { version = "0.13", features = ["openblas-static"] }
+rayon = "1.5.1"
+
+[dev-dependencies]
+criterion = { version = "0.3", features = ["html_reports"] }
+hdf5 = "0.7.1"
