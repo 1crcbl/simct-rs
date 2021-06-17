@@ -6,11 +6,11 @@ use ndarray_stats::DeviationExt;
 /// Enum for distance functions in a metric space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Metric {
-    /// L-1 or Manhattan distance.
+    /// L-1 or Manhattan distance. See [\[Wikipedia\]](https://en.wikipedia.org/wiki/Taxicab_geometry).
     Manhattan,
-    /// L-2 or Euclidean distance.
+    /// L-2 or Euclidean distance. See [\[Wikipedia\]](https://en.wikipedia.org/wiki/Euclidean_distance)
     Euclidean,
-    /// L-inf or Chebyshev distance
+    /// L-inf or Chebyshev distance. See [\[Wikipedia\]](https://en.wikipedia.org/wiki/Chebyshev_distance)
     Chebyshev,
     /// Angular or cosine distance
     Angular,

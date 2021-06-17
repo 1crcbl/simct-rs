@@ -42,9 +42,10 @@ pub struct CoverTree {
 }
 
 impl Default for CoverTree {
+    /// Creates a default cover tree with ```base = 1.37``` and Euclidean metric.
     fn default() -> Self {
         Self {
-            base: 2.,
+            base: 1.37,
             metric: Metric::Euclidean,
             root: None,
         }
@@ -52,6 +53,15 @@ impl Default for CoverTree {
 }
 
 impl CoverTree {
+    /// Creates a new empty tree with given ```base``` and ```metric```.
+    pub fn new(base: Scalar, metric: Metric) -> Self {
+        Self {
+            base,
+            metric,
+            root: None,
+        }
+    }
+
     /// Inserts a new point to a tree.
     pub fn insert(&mut self, data: Array1<Scalar>) {
         let count = self.size();

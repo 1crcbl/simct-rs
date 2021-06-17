@@ -71,7 +71,39 @@
 //! together until there is only one big tree left. The default value for ```chunk_size``` is ```0```,
 //! which implies no parallelism in construction.
 //!
+//! # Metric
+//! In the current version, the following metrics are supported by the library:
+//! - ```L-1``` metric: [```Metric::Manhattan```]
+//! - ```L-2``` metric: [```Metric::Euclidean```]
+//! - ```L-inf``` metric: [```Metric::Chebyshev```]
+//!
+//!
 //! # Usage
+//! Through the function [```CoverTree::new```] we can construct a new cover tree for a given ```base```
+//! and ```metric```. A default cover tree (created from [```CoverTree::default```]) has ```base = 1.37```
+//! and Euclidean metric. After creating a tree, we can invoke the function [```CoverTree::insert```]
+//! to add a new point to the tree sequentially, as shown in the example below:
+//!
+//! ```rust
+//! use ndarray::{Array, Array1};
+//! use simct::{CoverTree, CoverTreeBuilder, Metric};
+//!
+//! let mut rng = oorandom::Rand64::new(0);
+//! let data = Array::from_shape_simple_fn((100, 50), || rng.rand_float());
+//!
+//! // An empty cover tree.
+//! let mut ct = CoverTree::new(1.37, Metric::Euclidean);
+//!
+//! // Adds points to the tree sequentially.
+//! for row in data.outer_iter() {
+//!     ct.insert(row.to_owned());
+//! }
+//! ```
+//!
+//! Adding points sequentially is generally slow. We can reduce the construction time dividing the
+//! input dataset into smaller subsets and constructing cover trees for these subsets. These trees
+//! will be merged together at the end to form a final tree, as shown in the example below:
+//!
 //! ```rust
 //! use ndarray::{Array, Array1, Array2};
 //! use simct::{CoverTreeBuilder, Metric};
@@ -87,7 +119,7 @@
 //! // Insert a point to the tree.
 //! ct.insert(query);
 //!
-//! // Search 10 nearest neighbours for 100 query points.
+//! // Search 10 nearest neighbours for 10 query points.
 //! let queries = Array2::from_shape_simple_fn((10, 50), || rng.rand_float());
 //! let _ = ct.search2(queries.view(), 10);
 //!

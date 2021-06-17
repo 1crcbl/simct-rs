@@ -1,5 +1,7 @@
 # simct-rs
 
+[![Crates.io](https://img.shields.io/crates/v/simct)](https://crates.io/crates/simct) [![Documentation](https://docs.rs/simct/badge.svg)](https://docs.rs/simct)
+
 Nearest neighbour search with cover tree
 
 *Under development*

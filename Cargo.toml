@@ -3,6 +3,14 @@ name = "simct"
 version = "0.1.0"
 authors = ["1crcbl <1crcbl@protonmail.com>"]
 edition = "2018"
+license = "MIT OR Apache-2.0"
+
+readme = "README.md"
+description = "Approximate nearest neighbour search with cover tree"
+repository = "https://github.com/1crcbl/simct-rs"
+
+keywords = ["cover", "tree", "nearest", "neighbor", "search", "parallel"]
+categories = ["algorithms", "data-structures", "science"]
 
 [dependencies]
 ndarray = { version = "0.14.0", features = ["rayon"] }
