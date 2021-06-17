@@ -1,13 +1,16 @@
 #![allow(dead_code, unused_imports)]
-
-use std::collections::HashSet;
+use std::{
+    collections::{HashMap, HashSet},
+    time::Instant,
+};
 
 use hdf5;
 use ndarray::{
     parallel::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator},
     s, Array, ArrayView2, Axis,
 };
-use simct::{CoverTree, CoverTreeBuilder, Metric};
+use ndarray_linalg::assert;
+use simct::{CoverTree, CoverTreeBuilder, Metric, Neighbour};
 
 fn main() {
     let arg: Vec<_> = std::env::args().collect();
@@ -22,24 +25,42 @@ fn main() {
         std::process::exit(1);
     };
 
-    let file = hdf5::File::open(filepath).unwrap();
-    let train = file.dataset("train").unwrap().read_2d::<f64>().unwrap();
-    println!("{}", train.nrows());
+    println!("Open file: {}", filepath);
+    let (train, test) = {
+        let file = hdf5::File::open(filepath).unwrap();
+        let train = file.dataset("train").unwrap().read_2d::<f64>().unwrap();
+        let test = file.dataset("test").unwrap().read_2d::<f64>().unwrap();
+        let _validation = file
+            .dataset("neighbors")
+            .unwrap()
+            .read_2d::<usize>()
+            .unwrap();
 
+        (train, test)
+    };
+
+    println!("> Dim: {} x {}", train.nrows(), train.ncols());
+    println!("{}", std::mem::size_of::<Neighbour>());
+
+    let start = Instant::now();
     let ct = CoverTreeBuilder::new()
         .depth(15)
         .metric(Metric::Euclidean)
         .chunk_size(chunk_size)
         .build(train);
 
-    let test = file.dataset("test").unwrap().read_2d::<f64>().unwrap();
-    let _validation = file
-        .dataset("neighbors")
-        .unwrap()
-        .read_2d::<usize>()
-        .unwrap();
+    let build_duration = start.elapsed();
+    println!(
+        "> Construction duration: {:?} (ms)",
+        build_duration.as_millis()
+    );
 
-    let _ = ct.search2(test.slice(s!(0..10, ..)), 100);
+    let start = Instant::now();
+    let result = ct.search2(test.view(), 100);
+    println!(" >>> {}", result.len());
+
+    let search_duration = start.elapsed();
+    println!("> Search duration: {:?} (ms)", search_duration.as_millis());
 }
 
 fn validate(ct: &CoverTree, idx: usize, test: ArrayView2<f64>, validation_mtx: ArrayView2<usize>) {

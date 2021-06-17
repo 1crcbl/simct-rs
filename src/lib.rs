@@ -149,3 +149,5 @@ mod tests;
 mod tree;
 pub use tree::CoverTree;
 pub use tree::CoverTreeBuilder;
+pub use tree::Neighbour;
+pub use tree::QueryResult;

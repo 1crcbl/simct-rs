@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::VecDeque,
     ops::Div,
     sync::{Arc, RwLock},
 };
@@ -15,9 +15,16 @@ use rayon::{
 
 use crate::{Metric, Scalar};
 
+#[derive(Debug, Default)]
+pub struct QueryResult {
+    query_idx: usize,
+    neighbours: VecDeque<Neighbour>,
+}
+
 #[derive(Debug)]
 pub struct Neighbour {
     idx: usize,
+    query_idx: usize,
     dist: Scalar,
     node: Arc<RwLock<Node>>,
 }
@@ -173,40 +180,67 @@ impl CoverTree {
     /// are closest to the ```query``` point.
     pub fn search(&self, query: ArrayView1<'_, Scalar>, k: usize) -> Vec<Neighbour> {
         match &self.root {
-            Some(root) => Self::exe_search(root, query, k, self.metric),
+            Some(root) => Self::exe_search(root, query, 0, k, self.metric),
             None => Vec::with_capacity(0),
         }
     }
 
     /// Performs the nearest neighbour search for an array of queries and returns ```k``` neighbours who
     /// are closest to the points in the query array.
-    pub fn search2(
-        &self,
-        query: ArrayView2<'_, Scalar>,
-        k: usize,
-    ) -> HashMap<usize, Vec<Neighbour>> {
+    pub fn search2(&self, query: ArrayView2<'_, Scalar>, k: usize) -> Vec<QueryResult> {
         match &self.root {
-            Some(root) => query
-                .outer_iter()
-                .into_par_iter()
-                .enumerate()
-                .map(|(idx, q1)| (idx, Self::exe_search(root, q1, k, self.metric)))
-                .collect(),
-            None => HashMap::with_capacity(0),
+            Some(root) => {
+                let chunk_size = 100;
+                // let mut tmp_result = Vec::with_capacity(query.nrows());
+
+                let mut tmpr: Vec<Neighbour> = query
+                    .axis_chunks_iter(Axis(0), chunk_size)
+                    .into_par_iter()
+                    .enumerate()
+                    .map(|(chunk_idx, chunk)| {
+                        let tmp = chunk_idx * chunk_size;
+                        chunk
+                            .outer_iter()
+                            .enumerate()
+                            .map(|(idx, q1)| {
+                                let row_idx = tmp + idx;
+                                Self::exe_search(root, q1, row_idx, k, self.metric)
+                            })
+                            .flatten()
+                            .collect::<Vec<_>>()
+                    })
+                    .flatten()
+                    .collect();
+
+                let mut result: Vec<QueryResult> = (0..query.nrows())
+                    .map(|ii| QueryResult {
+                        query_idx: ii,
+                        neighbours: VecDeque::with_capacity(100),
+                    })
+                    .collect();
+
+                for nb in tmpr.drain(..) {
+                    result[nb.query_idx].neighbours.push_back(nb);
+                }
+
+                result
+            }
+            None => Vec::with_capacity(0),
         }
     }
 
     fn exe_search(
         root: &Arc<RwLock<Node>>,
         query: ArrayView1<'_, Scalar>,
+        query_index: usize,
         k: usize,
         metric: Metric,
     ) -> Vec<Neighbour> {
         let mut result = if metric == Metric::Angular {
             let q = query.div(query.norm());
-            Self::nn(q.view(), root, metric, k)
+            Self::nn(q.view(), query_index, root, metric, k)
         } else {
-            Self::nn(query, root, metric, k)
+            Self::nn(query, query_index, root, metric, k)
         };
 
         result.sort_by(|a, b| a.dist.partial_cmp(&b.dist).unwrap());
@@ -217,6 +251,7 @@ impl CoverTree {
     /// Executes the nearest neighbour search at a parent node.
     fn nn(
         x: ArrayView1<'_, Scalar>,
+        query_idx: usize,
         p: &Arc<RwLock<Node>>,
         metric: Metric,
         k: usize,
@@ -238,6 +273,7 @@ impl CoverTree {
 
                     Neighbour {
                         idx: nr.idx,
+                        query_idx,
                         dist,
                         node: node.clone(),
                     }
@@ -257,7 +293,7 @@ impl CoverTree {
 
         let mut nnc: Vec<_> = nn
             .par_iter()
-            .map(|nb| Self::nn(x.view(), &nb.node, metric, k))
+            .map(|nb| Self::nn(x.view(), query_idx, &nb.node, metric, k))
             .flatten()
             .collect();
 
