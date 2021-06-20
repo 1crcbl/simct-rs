@@ -1,26 +1,58 @@
+use std::sync::Weak;
 use std::{
     collections::VecDeque,
     ops::Div,
     sync::{Arc, RwLock},
 };
 
+use std::iter::FromIterator;
+
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
 use ndarray_linalg::{norm, Norm, NormalizeAxis};
 use rayon::{
-    iter::{
-        IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
-    },
+    iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator},
     slice::ParallelSliceMut,
 };
 
 use crate::{Metric, Scalar};
 
+/// Query result containing k-nearest neighbours to a query point.
 #[derive(Debug, Default)]
 pub struct QueryResult {
-    query_idx: usize,
+    query_index: usize,
     neighbours: VecDeque<Neighbour>,
 }
 
+impl QueryResult {
+    pub(crate) fn new(index: usize, neighbours: VecDeque<Neighbour>) -> Self {
+        Self {
+            query_index: index,
+            neighbours,
+        }
+    }
+
+    /// Returns the query index from batch query for this result.
+    pub fn index(&self) -> usize {
+        self.query_index
+    }
+
+    /// Sets the query index.
+    pub fn set_index(&mut self, query_index: usize) {
+        self.query_index = query_index;
+    }
+
+    /// Returns the nearest neighbours of a query.
+    pub fn neighbours(&self) -> &VecDeque<Neighbour> {
+        &self.neighbours
+    }
+
+    /// Consumes ```self``` and returns the query index and the nearest neighbours of that query.
+    pub fn take(self) -> (usize, VecDeque<Neighbour>) {
+        (self.query_index, self.neighbours)
+    }
+}
+
+/// A neighbour resulted from a k-nearest neighbour search.
 #[derive(Debug)]
 pub struct Neighbour {
     idx: usize,
@@ -30,10 +62,12 @@ pub struct Neighbour {
 }
 
 impl Neighbour {
-    pub fn idx(&self) -> usize {
+    /// Returns the index of a neighbour.
+    pub fn index(&self) -> usize {
         self.idx
     }
 
+    /// Returns the distance for a neighbour to a query point.
     pub fn dist(&self) -> Scalar {
         self.dist
     }
@@ -72,7 +106,7 @@ impl CoverTree {
     /// Inserts a new point to a tree.
     pub fn insert(&mut self, data: Array1<Scalar>) {
         let count = self.size();
-        let node = Arc::new(RwLock::new(Node::new(count, self.base, data)));
+        let node = Arc::new(RwLock::new(Node::new(count, self.metric, self.base, data)));
         self.insert_node(node);
     }
 
@@ -95,6 +129,7 @@ impl CoverTree {
 
                 if let Some(dist) = maxdist {
                     root.write().unwrap().maxdist = dist;
+                    node.write().unwrap().maxdist = dist;
                 }
 
                 if d_px > covdist {
@@ -102,15 +137,21 @@ impl CoverTree {
                         let mut p = root.clone();
                         let nr = node.read().unwrap();
 
-                        while d_px > 2. * covdist {
+                        while d_px > self.base * covdist {
                             let opt = p.write().unwrap().find_rem_leaf();
                             match opt {
                                 Some(leaf) => {
+                                    // leaf becomes a new root.
+                                    {
+                                        let mut pw = p.write().unwrap();
+                                        pw.set_parent(Some(Arc::downgrade(&leaf)));
+                                    }
                                     {
                                         let mut lw = leaf.write().unwrap();
                                         let p_reader = p.read().unwrap();
-                                        lw.update_level(p_reader.level + 1);
+                                        lw.set_level(p_reader.level + 1);
                                         lw.children.push(p.clone());
+                                        lw.set_parent(None);
                                     }
 
                                     p = leaf;
@@ -126,10 +167,10 @@ impl CoverTree {
                             covdist = p.read().unwrap().covdist;
                         }
                     }
-                    Self::add_child(&node, root.clone(), self.metric);
+                    Self::add_child(&node, root.clone());
                     self.root = Some(node);
                 } else {
-                    Self::add_child(&root, node, self.metric);
+                    Self::add_child(&root, node);
                 }
             }
             None => {
@@ -138,50 +179,56 @@ impl CoverTree {
         }
     }
 
-    fn add_child(parent: &Arc<RwLock<Node>>, child_node: Arc<RwLock<Node>>, metric: Metric) {
-        let d_pc = {
+    fn add_child(parent: &Arc<RwLock<Node>>, child_node: Arc<RwLock<Node>>) {
+        let (d_pc, p_level) = {
             let pr = parent.read().unwrap();
             let d_pc = {
                 let cr = child_node.read().unwrap();
-                metric.distance(pr.data.view(), cr.data.view())
+                cr.metric.distance(pr.data.view(), cr.data.view())
             };
 
             for q in &pr.children {
                 let (d_qx, covdist) = {
                     let q_reader = q.read().unwrap();
                     let cr = child_node.read().unwrap();
-                    let d_qx = metric.distance(q_reader.data.view(), cr.data.view());
+                    let d_qx = cr.metric.distance(q_reader.data.view(), cr.data.view());
                     (d_qx, q_reader.covdist)
                 };
 
                 if d_qx <= covdist {
-                    return Self::add_child(q, child_node, metric);
+                    return Self::add_child(q, child_node);
                 }
             }
 
-            d_pc
+            (d_pc, pr.level)
         };
-
-        let mut pw = parent.write().unwrap();
 
         {
             let mut cw = child_node.write().unwrap();
-            cw.update_level(pw.level - 1);
+            cw.set_level(p_level - 1);
+            cw.set_parent(Some(Arc::downgrade(&parent)));
         }
 
-        pw.children.push(child_node);
+        {
+            let mut pw = parent.write().unwrap();
+            // pw.update_parent_maxdist(&child_node);
+            pw.children.push(child_node);
 
-        if d_pc > pw.maxdist {
-            pw.maxdist = d_pc;
+            if d_pc > pw.maxdist {
+                pw.maxdist = d_pc;
+            }
         }
     }
 
     /// Performs the nearest neighbour search for a single query and returns ```k``` neighbours who
     /// are closest to the ```query``` point.
-    pub fn search(&self, query: ArrayView1<'_, Scalar>, k: usize) -> Vec<Neighbour> {
+    pub fn search(&self, query: ArrayView1<'_, Scalar>, k: usize) -> QueryResult {
         match &self.root {
-            Some(root) => Self::exe_search(root, query, 0, k, self.metric),
-            None => Vec::with_capacity(0),
+            Some(root) => {
+                let result = Self::exe_search(root, query, 0, k, self.metric);
+                QueryResult::new(0, VecDeque::from_iter(result.into_iter()))
+            }
+            None => QueryResult::default(),
         }
     }
 
@@ -190,8 +237,15 @@ impl CoverTree {
     pub fn search2(&self, query: ArrayView2<'_, Scalar>, k: usize) -> Vec<QueryResult> {
         match &self.root {
             Some(root) => {
-                let chunk_size = 100;
-                // let mut tmp_result = Vec::with_capacity(query.nrows());
+                // Simple calculation for chunk size
+                let nrows = query.nrows();
+                let chunk_size = if nrows > 1000 {
+                    1000
+                } else if nrows > 100 {
+                    100
+                } else {
+                    10
+                };
 
                 let mut tmpr: Vec<Neighbour> = query
                     .axis_chunks_iter(Axis(0), chunk_size)
@@ -214,7 +268,7 @@ impl CoverTree {
 
                 let mut result: Vec<QueryResult> = (0..query.nrows())
                     .map(|ii| QueryResult {
-                        query_idx: ii,
+                        query_index: ii,
                         neighbours: VecDeque::with_capacity(100),
                     })
                     .collect();
@@ -229,6 +283,7 @@ impl CoverTree {
         }
     }
 
+    #[inline(always)]
     fn exe_search(
         root: &Arc<RwLock<Node>>,
         query: ArrayView1<'_, Scalar>,
@@ -236,15 +291,15 @@ impl CoverTree {
         k: usize,
         metric: Metric,
     ) -> Vec<Neighbour> {
-        let mut result = if metric == Metric::Angular {
+        let mut result = Vec::with_capacity(k);
+
+        if metric == Metric::Angular {
             let q = query.div(query.norm());
-            Self::nn(q.view(), query_index, root, metric, k)
+            Self::nn(q.view(), query_index, root, metric, k, &mut result)
         } else {
-            Self::nn(query, query_index, root, metric, k)
+            Self::nn(query, query_index, root, metric, k, &mut result)
         };
 
-        result.sort_by(|a, b| a.dist.partial_cmp(&b.dist).unwrap());
-        result.truncate(k);
         result
     }
 
@@ -255,21 +310,20 @@ impl CoverTree {
         p: &Arc<RwLock<Node>>,
         metric: Metric,
         k: usize,
-    ) -> Vec<Neighbour> {
+        result: &mut Vec<Neighbour>,
+    ) {
         let mut nn = {
             let pr = p.read().unwrap();
             if pr.children.is_empty() {
-                return Vec::with_capacity(0);
+                return;
             }
 
             let mut nn: Vec<_> = pr
                 .children
-                .par_iter()
-                .enumerate()
-                .map(|(_idx, node)| {
+                .iter()
+                .map(|node| {
                     let nr = node.read().unwrap();
-                    let dta = nr.data.view();
-                    let dist = metric.distance(x, dta);
+                    let dist = metric.distance(x, nr.data.view());
 
                     Neighbour {
                         idx: nr.idx,
@@ -281,25 +335,47 @@ impl CoverTree {
                 .collect();
 
             nn.sort_by(|a, b| a.dist.partial_cmp(&b.dist).unwrap());
-            let bound = pr.covdist
-                + match nn.get(k) {
-                    Some(nb) => nb.dist,
-                    None => nn.last().unwrap().dist,
-                };
-
-            nn.retain(|x| x.dist <= bound);
             nn
         };
 
-        let mut nnc: Vec<_> = nn
-            .par_iter()
-            .map(|nb| Self::nn(x.view(), query_idx, &nb.node, metric, k))
-            .flatten()
-            .collect();
+        for child in nn.drain(..) {
+            let mut insert_idx = None;
+            for (r_idx, r_n) in result.iter().enumerate() {
+                if child.dist < r_n.dist {
+                    insert_idx = Some(r_idx);
+                    break;
+                }
+            }
 
-        nn.append(&mut nnc);
+            let node = child.node.clone();
+            let d_cx = child.dist;
 
-        nn
+            match insert_idx {
+                Some(idx) => {
+                    if result.len() == k {
+                        result.pop();
+                    }
+
+                    result.insert(idx, child);
+                }
+                None => {
+                    if result.len() < k {
+                        result.push(child);
+                    }
+                }
+            }
+
+            if result.len() < k {
+                Self::nn(x.view(), query_idx, &node, metric, k, result);
+            } else {
+                let maxdist = node.read().unwrap().maxdist;
+                let k_dist = result.last().unwrap().dist;
+
+                if k_dist + maxdist > d_cx {
+                    Self::nn(x.view(), query_idx, &node, metric, k, result);
+                }
+            }
+        }
     }
 
     fn merge(one: &mut Self, two: &mut Self) {
@@ -317,7 +393,7 @@ impl CoverTree {
             (Some(_), None) => return,
             (None, Some(_)) => return,
             (None, None) => {
-                panic!("Noooooooooo")
+                panic!("Empty roots")
             }
         };
 
@@ -327,19 +403,14 @@ impl CoverTree {
             two.raise(level);
         }
 
-        // let mut leftover = Self::merge_internal(one, two);
         let two_root = two.root.take().unwrap();
-        let mut leftover = Self::merge_nodes(one.root.as_ref().unwrap(), two_root, one.metric);
+        let mut leftover = Self::merge_nodes(one.root.as_ref().unwrap(), two_root);
         for node in leftover.drain(0..) {
-            Self::add_child(one.root.as_ref().unwrap(), node, one.metric);
+            Self::add_child(one.root.as_ref().unwrap(), node);
         }
     }
 
-    fn merge_nodes(
-        p: &Arc<RwLock<Node>>,
-        q: Arc<RwLock<Node>>,
-        metric: Metric,
-    ) -> Vec<Arc<RwLock<Node>>> {
+    fn merge_nodes(p: &Arc<RwLock<Node>>, q: Arc<RwLock<Node>>) -> Vec<Arc<RwLock<Node>>> {
         let mut uncovered = Vec::with_capacity(8);
         let mut leftover = Vec::with_capacity(8);
         let mut sepcov = Vec::with_capacity(8);
@@ -355,7 +426,7 @@ impl CoverTree {
                     let sepdist = pr.covdist / pr.base;
 
                     (
-                        metric.distance(pr.data.view(), rr.data.view()),
+                        pr.metric.distance(pr.data.view(), rr.data.view()),
                         pr.covdist,
                         sepdist,
                     )
@@ -365,11 +436,12 @@ impl CoverTree {
                     // Equivalent to foundmatch in the paper: Some(idx) <=> foundmatch = true
                     let mut match_idx = None;
                     let pr = p.read().unwrap();
+
                     for (idx, s) in pr.children.iter().enumerate() {
                         let d_sr = {
                             let rr = (&r).read().unwrap();
                             let sr = s.read().unwrap();
-                            metric.distance(rr.data.view(), sr.data.view())
+                            rr.metric.distance(rr.data.view(), sr.data.view())
                         };
 
                         if d_sr < sepdist {
@@ -382,7 +454,7 @@ impl CoverTree {
                     match match_idx {
                         Some(idx) => {
                             let s = pr.children.get(idx).unwrap();
-                            leftover.append(&mut Self::merge_nodes(s, r, metric));
+                            leftover.append(&mut Self::merge_nodes(s, r));
                         }
                         None => {
                             sepcov.push(r);
@@ -400,18 +472,21 @@ impl CoverTree {
             pw.children.append(&mut sepcov);
         }
 
-        Self::add_child(&p, q, metric);
+        Self::add_child(&p, q);
         let mut leftover_prime = Vec::with_capacity(leftover.len());
 
         for r in leftover.drain(0..) {
             let (d_rp, covdist) = {
                 let rr = r.read().unwrap();
                 let pr = p.read().unwrap();
-                (metric.distance(rr.data.view(), pr.data.view()), pr.covdist)
+                (
+                    pr.metric.distance(rr.data.view(), pr.data.view()),
+                    pr.covdist,
+                )
             };
 
             if d_rp < covdist {
-                Self::add_child(&p, r, metric);
+                Self::add_child(&p, r);
             } else {
                 leftover_prime.push(r);
             }
@@ -438,7 +513,7 @@ impl CoverTree {
                         let mut lw = leaf.write().unwrap();
                         let root_reader = root.read().unwrap();
                         let new_level = root_reader.level + 1;
-                        lw.update_level(new_level);
+                        lw.set_level(new_level);
                         lw.children.push(root.clone());
                     }
 
@@ -447,7 +522,7 @@ impl CoverTree {
                 None => {
                     let mut root_writer = root.write().unwrap();
                     let new_level = root_writer.level + 1;
-                    root_writer.update_level(new_level);
+                    root_writer.set_level(new_level);
                 }
             };
 
@@ -593,7 +668,7 @@ impl CoverTreeBuilder {
         let base = match self.base {
             Some(base) => base,
             None => match self.depth {
-                Some(depth) => (2_f64).powf((max_dist / min_dist).log2() / depth as f64),
+                Some(depth) => (2 as Scalar).powf((max_dist / min_dist).log2() / depth as Scalar),
                 None => 1.37,
             },
         };
@@ -608,7 +683,7 @@ impl CoverTreeBuilder {
         let node_idx = chunk_index * data.nrows();
 
         for (ii, dta) in data.outer_iter().enumerate() {
-            let node = Node::with_level(node_idx + ii, level, base, dta.to_owned());
+            let node = Node::with_level(node_idx + ii, metric, level, base, dta.to_owned());
             ct.insert_node(Arc::new(RwLock::new(node)));
         }
 
@@ -620,59 +695,95 @@ impl CoverTreeBuilder {
 pub struct Node {
     idx: usize,
     level: i32,
+    metric: Metric,
     base: Scalar,
     covdist: Scalar,
     maxdist: Scalar,
+    parent: Option<Weak<RwLock<Node>>>,
     data: Array1<Scalar>,
     children: Vec<Arc<RwLock<Node>>>,
 }
 
 impl Node {
-    pub(crate) fn new(idx: usize, base: Scalar, data: Array1<Scalar>) -> Self {
+    pub(crate) fn new(idx: usize, metric: Metric, base: Scalar, data: Array1<Scalar>) -> Self {
         Self {
             idx,
             level: 0,
+            metric,
             base,
             covdist: 1.,
             maxdist: Scalar::MIN,
+            parent: None,
             data,
             children: Vec::with_capacity(8),
         }
     }
 
-    pub(crate) fn with_level(idx: usize, level: i32, base: Scalar, data: Array1<Scalar>) -> Self {
+    pub(crate) fn with_level(
+        idx: usize,
+        metric: Metric,
+        level: i32,
+        base: Scalar,
+        data: Array1<Scalar>,
+    ) -> Self {
         Self {
             idx,
             level,
+            metric,
             base,
             covdist: base.powi(level),
             maxdist: Scalar::MIN,
+            parent: None,
             data,
             children: Vec::with_capacity(8),
         }
     }
 
-    pub(crate) fn update_level(&mut self, level: i32) {
-        self.level = level;
-        self.covdist = self.base.powi(level);
+    #[inline(always)]
+    pub(crate) fn set_parent(&mut self, parent: Option<Weak<RwLock<Node>>>) {
+        self.parent = parent;
     }
 
-    /// Find and remove a leaf.
+    pub(crate) fn set_level(&mut self, level: i32) {
+        self.level = level;
+        self.covdist = self.base.powi(level);
+
+        for c in &self.children {
+            let mut cw = c.write().unwrap();
+            cw.set_level(level - 1);
+        }
+    }
+
+    /// Finds and removes a leaf.
     pub(crate) fn find_rem_leaf(&mut self) -> Option<Arc<RwLock<Node>>> {
         let mut idx = None;
         for (child_idx, child) in self.children.iter().enumerate() {
-            let mut cr = child.write().unwrap();
-            if cr.children.is_empty() {
+            let mut cw = child.write().unwrap();
+            if cw.children.is_empty() {
                 idx = Some(child_idx);
                 break;
-            } else if let Some(q) = cr.find_rem_leaf() {
+            } else if let Some(q) = cw.find_rem_leaf() {
                 return Some(q);
             }
         }
 
         // Ordering among children are not important. So we use swap_remove for quick remove.
         match idx {
-            Some(idx) => Some(self.children.swap_remove(idx)),
+            Some(idx) => {
+                let leaf = self.children.swap_remove(idx);
+                {
+                    let mut lw = leaf.write().unwrap();
+                    for child in &self.children {
+                        let cr = child.read().unwrap();
+                        let d = self.metric.distance(lw.data.view(), cr.data.view());
+
+                        if d > lw.maxdist {
+                            lw.maxdist = d;
+                        }
+                    }
+                }
+                Some(leaf)
+            }
             None => None,
         }
     }

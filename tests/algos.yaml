@@ -1,0 +1,41 @@
+float:
+  any:
+    ball:
+      # disabled: true
+      docker-tag: ann-benchmarks-sklearn
+      module: ann_benchmarks.algorithms.balltree
+      constructor: BallTree
+      base-args: ["@metric"]
+      run-groups:
+        ball:
+          args: &treeargs [[100]]
+    kd:
+      # disabled: true
+      docker-tag: ann-benchmarks-sklearn
+      module: ann_benchmarks.algorithms.kdtree
+      constructor: KDTree
+      base-args: ["@metric"]
+      run-groups:
+        ball:
+          args: *treeargs
+    annoy:
+      docker-tag: ann-benchmarks-annoy
+      module: ann_benchmarks.algorithms.annoy
+      constructor: Annoy
+      base-args: ["@metric"]
+      run-groups:
+        annoy:
+          args: [[100]]
+          query-args: [[100, 1000, 10000]]
+
+  euclidean:
+    kgraph:
+      disable: true
+      docker-tag: ann-benchmarks-kgraph
+      module: ann_benchmarks.algorithms.kgraph
+      constructor: KGraph
+      base-args: ["@metric"]
+      run-groups:
+        kgraph:
+          args: [ {'reverse': -1}, True] # XXX: hard-codes save_index as True
+          query-args: [[1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]]

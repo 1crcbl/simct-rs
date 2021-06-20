@@ -21,7 +21,7 @@ impl Metric {
     pub fn distance(&self, a: ArrayView1<'_, Scalar>, b: ArrayView1<'_, Scalar>) -> Scalar {
         match self {
             Metric::Manhattan => a.l1_dist(&b).unwrap(),
-            Metric::Euclidean => a.l2_dist(&b).unwrap(),
+            Metric::Euclidean => a.l2_dist(&b).unwrap() as Scalar,
             Metric::Chebyshev => a.linf_dist(&b).unwrap(),
             Metric::Angular => {
                 let mut dot = a.dot(&b);
@@ -30,7 +30,7 @@ impl Metric {
                     dot = 1.;
                 }
 
-                1. - dot.acos() / std::f64::consts::PI
+                1. - dot.acos() / (std::f64::consts::PI as Scalar)
             }
         }
     }
